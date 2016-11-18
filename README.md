@@ -1,27 +1,47 @@
 TensorFlow Best Practices
 ------------------------------
 
-This is a collection of gotchas I collected while working with TensorFlow. It is, without doubt, opinionated.
+This is a collection of gotchas collected by AI.codes engineers while working with TensorFlow. It is, without doubt, opinionated.
 
-#### Think in computational graph, not in tensors
+#### Working with computational graph
 
-A TensorFlow model is essentially a computational graph, where nodes are [operations](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#Operation and links in-between are [tensors](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#Tensor). The computational graph is defined as a  [GraphDef](https://www.tensorflow.org/versions/r0.9/how_tos/tool_developers/index.html#graphdef) protobuf message. `Graph` and `operation` are first class citizens in TF, where tensor is an intermediate object that is only used at runtime for passing data. From this perspective OpGraph is probably a more accurate name than TensorFlow.
+A TensorFlow model is essentially a computational graph, where nodes are [operations](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#Operation) and links in-between are [tensors](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#Tensor). The computational graph is defined as a  [GraphDef](https://www.tensorflow.org/versions/r0.9/how_tos/tool_developers/index.html#graphdef) protobuf message. `Graph` and `operation` are first class citizens in TF, where tensor is an intermediate object that is only used at runtime for passing data. From this perspective _OpGraph_ is probably a more accurate name than _TensorFlow_.
 
-#### OO or not OO
+#### Object or not object
 
-How you weave operations into the computational graph is a purely personal choice, as long as the code is clean and readable. What we find, in practice, is that using **light OO** helps organizing the code better. By light OO we mean grouping the construction of computational graph into `inference`, `loss` and `optimize` as member functions, but not going crazy about inherence and design patterns. Organizing the computational graph with canonical machine learning concepts promotes code reuse and helps human readers to understand the overall model structure.
+How you write the code to weave operations into the computational graph is a purely personal choice, as long as the code is clean and readable. What we find, in practice, is that using _light model objects_ helps organizing the code better. By light model object we mean grouping model into an object, and group the constructions of computational graph into components such as `inference`, `loss` and `optimize` (defined as member functions of the model object). However, do not go crazy about other OO features such as inherence and design patterns--they rarely make sense in this context. Organizing the computational graph into groups promotes code reuse and helps human readers to understand the overall model structure.
+
+The code looks like this.
+```python
+class AwesomeModel(object):
+  def __init__(self):
+    """ init the model with hyper-parameters etc """
+
+  def inference(self, x):
+    """ This is the forward calculation from x to y """
+    return some_op(x, name="inference")
+
+  def loss(self, batch_x, batch_y=None):
+    y_predict = self.inference(batch_x)
+    self.loss = tf.loss_function(y, y_predict, name="loss") # supervised
+    # loss = tf.loss_function(x, y_predicted) # unsupervised
+
+  def optimize(self, batch_x, batch_y):
+    return tf.train.optimizer.minimize(self.loss, name="optimizer")
+```
+You may notice that we name these operations. See the section below for a detailed explanation.
 
 #### Use `Saver` liberally
 
-Unless dealing with toy examples, we rarely just train a real model in one shot. It may take days to train a real model. Model trained on small data may also later get further trained on larger dataset, or with a different set of super parameters. In all these cases, treating training as an ongoing process is more rewarding than treating it as a one-shot process. This means you should include `saver.restore` and `saver.save` from the get go. It will help you immensely down the road. The Saver API doc is [here](https://www.tensorflow.org/versions/r0.11/api_docs/python/state_ops.html#Saver).
+Unless dealing with toy examples, we rarely just train a real-world model in one-shot. It may take days to train one. Model trained on a set of data may later gets trained further on a different (larger) set of data, or with a different set of hyper-parameters. In all these cases, treating training as an ongoing process is more rewarding than treating it as a one-shot process. This means you should include `saver.restore` and `saver.save` from the get go. It will help you immensely down the road. The `Saver` API doc is [here](https://www.tensorflow.org/versions/r0.11/api_docs/python/state_ops.html#Saver).
 
 _Gotcha_: When saving variables, make sure that `Saver` class is constructed **after** all variables are defined. Saver only captures all variables at the time it is constructed, so any new variables defined after `Saver()` will not be saved automatically.
 
 #### Use `tf.app.run()` and FLAGS from day one.
 
-Along the same logic mentioned in the previous best practice, you are likely to tweak the model as you progress.  Because most of our models are end-to-end, there are bunch of different parameters to tweak. Using global variables to hold super-parameter values will quickly go out of control.
+Along the same logic mentioned in the previous best practice, you are likely to tweak the model as you progress.  Because most of our models are end-to-end, there are bunch of different parameters to tweak. Using global variables to hold hyper-parameters will quickly go out of control, as there are too many of them.
 
-At AI.codes, we enforce the convention that all super parameters are defined as FLAGS. It is actually super easy to define flags, and they all come with default values and documentation. Documentation is more important than you think -- it becomes a nightmare three month later when you forget about why you set a global variable to certain magic number. With FLAGS you can document it easily. All it takes is a few lines of code.
+At AI.codes, we enforce the convention that all hyper-parameters are defined as FLAGS. It is actually not hard to define flags, once you get used to it. Another advantage is that flags come with default values and documentation. Documentation is more important than you think--it becomes a nightmare three month later when you forget about why you set a global variable to certain magic number. With FLAGS you can document it easily. All it takes is a few lines of code.
 
 ```python
 tf.app.flags.DEFINE_boolean("some_flag", False, "Documentation")
@@ -66,7 +86,7 @@ Vocab = namedtuple('Vocab', ['x', 'y', 'loss', 'inference', 'learning_rate', 'op
 vocab = Vocab('x', 'y', 'cost', 'inference', 'learning_rate', 'optimizer')
 ```
 
-_Gotcha_: **Passing values to placeholder in restored model**
+_Gotcha_: **Passing values to placeholders in restored models**
 
 We know it well that we can use `feed_dict` to pass values to placeholders, when we have a references to the placeholders. For instance, if we have `x = tf.placeholder(...)`, we can later use `session.run(some_tensor, feed_dict={x: value})` to pass value to the computational graph. What is less obvious is when you restore the model, where you do not have a direct reference to `x` anymore.
 
@@ -74,7 +94,7 @@ If you correctly name your placeholder operation, as in `x = tf.placeholder(...,
 
 _Gotcha_: **Evaluate operations in restored models**
 
-`Session.run()` can take both operations and tensors. If you pass in operations, however, the returned value would be `None`. This is [documented](https://www.tensorflow.org/versions/r0.11/api_docs/python/client.html#Session) but you may easily skim through the document and get puzzled by the fact that you get nothing back. This actually reveal some peculiarities of TensorFlow's Python API that I will explain here.
+`Session.run()` can take both operations and tensors. If you pass in operations, however, the returned value would be `None`. This is [documented](https://www.tensorflow.org/versions/r0.11/api_docs/python/client.html#Session) but you may easily skim through the document and get puzzled by the fact that you get nothing back. This actually reveal some peculiarities of TensorFlow's Python API that we will explain here.
 
 Take a look at the statement `a = tf.placeholder(...)`. It looks like a constructor call, isn't it? You'd think that `a` must be of `placeholder` type, whatever that type is. Now let's look at `a = tf.matmul(B, C)`. Well, this time you may say that `a` should be a tensor, as the result of `B * C`. The truth is, `a` is tensor in both cases, except that the first case is a bit misleading in light of the Python coding convention.
 
