@@ -62,13 +62,16 @@ Note that we use `tf.app.run()` so it takes care of flag parsing. We put the mai
 
 As mentioned earlier, operation is first class citizen in TF. It is obvious that `tf.matmul` is an operation. It is less obvious that `tf.placeholder` and `tf.train.optimizer.minimize` are also operations. When we persist the model, all these operations are persisted.
 
-When we first define the model Python, key operations such as `minimize` and `inference` are referenced using Python variables, and they can be used in code easily. When the computational graph is reloaded from GraphDef and checkpoint files, however, we no longer have the Python variables referring to them.
+When we first define the model in Python, operations such as `optimize` and `inference` are referenced by variables, i.e. `opt = model.optimize(...)` where we can later use `opt` in the code. When the computational graph is restored from serialized GraphDef and checkpoint files, however, we no longer have a Python reference to the operation. We need a way to get the correct operation from the graph.
 
-We recommend naming key operations that you may need later, so when the graph is reloaded, you can retrieve these operations by name, using `graph.get_operation_by_name(name)`. A good practice is to standardize the names from an agreed vocabulary. For instance, if we agree upon that "loss" is always used as the name for loss function in models, in MNIST example, we'd use
+We recommend naming operations that you may need later, so when the graph is restored, you can retrieve these operations by their names, using `graph.get_operation_by_name(name)`. A good practice is to standardize the names from an agreed vocabulary. For instance, if we agree upon that _loss_ is always used as the name for loss function in models, in MNIST example, we'd use
+
 ```python
-tf.nn.softmax_cross_entropy_with_logits(logits, labels, dim=-1, name="loss")
+loss_tensor = tf.nn.softmax_cross_entropy_with_logits(logits, labels, dim=-1, name="loss")
 ```
-to label the loss function. Shared vocabulary enables efficient communication between engineers. Here is a set of words in our vocabulary, independent of the model.
+to label the loss operation. We will no longer have `loss_tensor` when we restore the model, but we can always call `graph.get_operation_by_name("loss")` to get the operation.
+
+_Gotcha_: Shared vocabulary enables efficient communication between engineers. Here is a set of words in our vocabulary, independent of the models defined.
 
 * x (x is the name of the placeholder. As mentioned, placeholder is an operation)
 * y (in supervised case)
@@ -77,13 +80,13 @@ to label the loss function. Shared vocabulary enables efficient communication be
 * learning_rate
 * optimizer
 
-Engineers can of course name additional operations in specific cases. We define the common vocabulary in a file that can be imported by other models, and use Python's `namedtuple` to add a bit type-safety, instead of using raw strings as keys. The following lines of code in `vocab.py` seems cryptic, but really it allows us to use references `vocab.x` or `vocab.inference` as names, instead of a more error-prone one like `vocab['inference']`.
+Engineers can of course name additional operations. The ones we defined here are fairly generic. We put the definition in a common file called `vocab.py` that can be imported by others. We use Python's `namedtuple` to get a bit compile-time check, instead of using raw strings directly. The code seems cryptic, but really it allows us to use references `vocab.x` or `vocab.inference` as names, as oppose to the more error-prone ones like `vocab['inference']` or `vocab['loss']`.
 
 ```python
 from collections import namedtuple
 
 Vocab = namedtuple('Vocab', ['x', 'y', 'loss', 'inference', 'learning_rate', 'optimizer'])
-vocab = Vocab('x', 'y', 'cost', 'inference', 'learning_rate', 'optimizer')
+vocab = Vocab('x', 'y', 'loss', 'inference', 'learning_rate', 'optimizer')
 ```
 
 _Gotcha_: **Passing values to placeholders in restored models**
