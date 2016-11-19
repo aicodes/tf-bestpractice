@@ -71,10 +71,10 @@ summary_writer = tf.train.SummaryWriter(summary_dir_name, sess.graph)
 summaries_tensor = tf.merge_all_summaries()
 
 # 4. At runtime, in appropriate places, evaluate the summaries_tensor, to assign value.
-summary_value, loss, ... = sess.run([summaries_tensor, loss, ...], feed_dict={...})
+summary_value, ... = sess.run([summaries_tensor, ...], feed_dict={...})
 
 # 5. Write the summary value to disk, using summary writer.
-summary_writer.add_summary(summary, global_step=step)
+summary_writer.add_summary(summary_value, global_step=step)
 ```
 
 _Gotcha_: `summary_name` is the metric name in visualization. When restoring a computation graph, all summary operations are restored. However, summary writer and the merged tensor are not. Thus, you will need to do step 2 and 3 again, after restoring the graph from disk.
@@ -172,4 +172,10 @@ to restore the tensor.
 
 Wait, I hear your protest. If we can use just add things to collections, why would we go through all the trouble above to name operations? We can just name our collections! There are two reasons. First, TensorFlow system itself uses collections, sometimes in an undisciplined way. The framework is using keys defined in [GraphKeys](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#GraphKeys), and it is not obvious to users what are the keys you should avoid unless you read the doc. Second, each collection is a list. You will need to either store each value under a unique key, or remember the order values are added to the collection to retrieve them properly. It is far more error-prone than just use unique operation names. You can certainly use standard names for collections. Keep in mind that the framework change may introduce bugs to your code if TF introduces keys that you are already using.
 
-Based on the reasoning above, we recommend limiting the usage of collections, and only use it when there is no other alternative.
+A better way, recommended by us, is to **wrap an identity operation around the library call**, and name the identity operation properly. The code looks like this.
+
+```python
+# normally you'd just use r = some_library_call(args), if you don't care about r in restored graph.
+r = tf.identity(some_library_call(args), name="unique_op_name")
+```
+Now you can easily get the operation or tensor from the graph.
