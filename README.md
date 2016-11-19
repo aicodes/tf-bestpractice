@@ -3,6 +3,13 @@ TensorFlow Best Practices
 
 This is a collection of gotchas collected by AI.codes engineers while working with TensorFlow. It is, without doubt, opinionated.
 
+#### TL,DR:
+* Represent the model as a Python class, with `loss`, `inference` and `optimize` member functions.
+* Use checkpoints in training.
+* Use summaries.
+* Use flags to represent hyper-parameters.
+* Name important operations, with a standard vocabulary
+
 #### Working with computational graph
 
 A TensorFlow model is essentially a computational graph, where nodes are [operations](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#Operation) and links in-between are [tensors](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#Tensor). The computational graph is defined as a  [GraphDef](https://www.tensorflow.org/versions/r0.9/how_tos/tool_developers/index.html#graphdef) protobuf message. `Graph` and `operation` are first class citizens in TF, where tensor is an intermediate object that is only used at runtime for passing data. From this perspective _OpGraph_ is probably a more accurate name than _TensorFlow_.
@@ -33,9 +40,48 @@ You may notice that we name these operations. See the section below for a detail
 
 #### Use `Saver` liberally
 
-Unless dealing with toy examples, we rarely just train a real-world model in one-shot. It may take days to train one. Model trained on a set of data may later gets trained further on a different (larger) set of data, or with a different set of hyper-parameters. In all these cases, treating training as an ongoing process is more rewarding than treating it as a one-shot process. This means you should include `saver.restore` and `saver.save` from the get go. It will help you immensely down the road. The `Saver` API doc is [here](https://www.tensorflow.org/versions/r0.11/api_docs/python/state_ops.html#Saver).
+Unless dealing with toy examples, we rarely just train a real-world model in one-shot. It may take days to train one. Model trained on a set of data may later gets trained further on a different (larger) set of data, or with a different set of hyper-parameters. In all these cases, treating training as an ongoing process is more rewarding than treating it as a one-shot process. This means you should include `saver.restore` and `saver.save` from the get go. It will help you immensely down the road. The `Saver` API doc is [here](https://www.tensorflow.org/versions/r0.11/api_docs/python/state_ops.html#Saver). To store a computation graph, you use:
+```python
+saver = tf.train.Saver()
+saver.save(sess, checkpoints_file_name)
+```
 
-_Gotcha_: When saving variables, make sure that `Saver` class is constructed **after** all variables are defined. Saver only captures all variables at the time it is constructed, so any new variables defined after `Saver()` will not be saved automatically.
+To restore a graph, use
+```python
+saver = tf.train.import_meta_graph(checkpoints_file_name + '.meta')
+saver.restore(sess, checkpoints_file_name)
+```
+
+_Gotcha_: When saving/restoring variables, make sure that `Saver` class is constructed **after** all variables are defined. Saver only captures all variables at the time it is constructed, so any new variables defined after `Saver()` will not be saved/restored automatically.
+
+Because of that, when you restore from a previously checkpoint, you will have to construct the saver from meta graph, not via `saver = tf.train.Saver()` (unless you define again all the variables). What we found is that sometimes it is hard to separate variable definition from model definition (especially when you use predefined modules like LSTM where variable definitions are embedded in these units). As a result, restoring variables from meta graph is much easier than restoring them by defining them again.
+
+#### Use summaries and Tensorboard from day one
+
+Like checkpoints, summaries are fantastic ways to let you get a snapshot of the model during the training process. Summary is extremely easy to use. Think of summary as a glorified `printf(tensor)`, where you can visualize the output later. Tensorflow provides scalar, image, audio, and histogram summaries. To use summary, just pass the tensor to a summary operation:
+```python
+# 1. Declare summaries that you'd like to collect.
+tf.scalar_summary("summary_name", tensor, name = "summary_op_name")
+
+# 2. Construct a summary writer object for the computation graph, once all summaries are defined.
+summary_writer = tf.train.SummaryWriter(summary_dir_name, sess.graph)
+
+# 3. Group all previously declared summaries for serialization. Usually we want all summaries defined
+# in the computation graph. To pick a subset, use tf.merge_summary([summaries]).
+summaries_tensor = tf.merge_all_summaries()
+
+# 4. At runtime, in appropriate places, evaluate the summaries_tensor, to assign value.
+summary_value, loss, ... = sess.run([summaries_tensor, loss, ...], feed_dict={...})
+
+# 5. Write the summary value to disk, using summary writer.
+summary_writer.add_summary(summary, global_step=step)
+```
+
+_Gotcha_: `summary_name` is the metric name in visualization. When restoring a computation graph, all summary operations are restored. However, summary writer and the merged tensor are not. Thus, you will need to do step 2 and 3 again, after restoring the graph from disk.
+
+TensorBoard not only helps visualize the computation graph, it also gives you a good idea of learning rate if you put the loss value in summary. You can certainly just print loss values to stdout during training, but we human are not good at visualizing the shape of the loss curve just by looking at a series of numbers. When the curve is plotted in TensorBoard, you will immediately see the trend and know if learning rate is too low or too high.
+
+At AI.codes, we make it **mandatory** to export training `loss` and validation `error` to summaries. It also helps us to justify if a model is appropriately trained, over-trained, or can be further improved.
 
 #### Use `tf.app.run()` and FLAGS from day one.
 
@@ -56,6 +102,7 @@ if __name__ == '__main__':
     tf.app.run()
 ```
 Note that we use `tf.app.run()` so it takes care of flag parsing. We put the main logic inside `main(_)`.
+
 
 
 #### Name thy operations
