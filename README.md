@@ -8,7 +8,7 @@ This is a collection of gotchas collected by AI.codes engineers while working wi
 * Use checkpoints in training.
 * Use summaries.
 * Use flags to represent hyper-parameters.
-* Name important operations, with a standard vocabulary
+* Name important operations, with a standard vocabulary.
 
 #### Working with computational graph
 
@@ -140,7 +140,7 @@ _Gotcha_: **Passing values to placeholders in restored models**
 
 We know it well that we can use `feed_dict` to pass values to placeholders, when we have a references to the placeholders. For instance, if we have `x = tf.placeholder(...)`, we can later use `session.run(some_tensor, feed_dict={x: value})` to pass value to the computational graph. What is less obvious is when you restore the model, where you do not have a direct reference to `x` anymore.
 
-If you correctly name your placeholder operation, as in `x = tf.placeholder(..., name=vocab.x)`, you can retrieve the operation later by using `graph.get_operation_by_name(vocab.x)`. A caveat here is that you are getting the **operation**, not the **tensor**. To get the actual tensor that can be used as the key in feed_dict, you can either take the ugly route, using `graph.get_tensor_by_name(vocab.x + ':0')`, or, a better way, `graph.get_operation_by_name(vocab.x).outputs[0]`. The ugly way works because tensors, as outputs of operations, are by default named as `operation_name:N` where `N` is the nth output. Placeholder tensor only has one output, thus the `:0` part.
+If you correctly name your placeholder operation, as in `x = tf.placeholder(..., name=vocab.x)`, you can retrieve the operation later by using `graph.get_operation_by_name(vocab.x)`. A caveat here is that you are getting the **operation**, not the **tensor**. To get the actual tensor that can be used as the key in feed_dict, you can either take the ugly route, using `graph.get_tensor_by_name(vocab.x + ':0')`, or, a better way, `graph.get_operation_by_name(vocab.x).outputs[0]`. The ugly way works because tensors, as outputs of operations, are by default named as `operation_name:N` where `N` is the nth output. Placeholder tensor only has one output, thus the `:0` part. You can even wrap that into a `get_tensor_by_op_name(graph, 'op_name')` function if all you need is tensor, or operation.
 
 _Gotcha_: **Evaluate operations in restored models**
 
@@ -151,3 +151,25 @@ Take a look at the statement `a = tf.placeholder(...)`. It looks like a construc
 The way to understand statements like `a = tf.op(..., name='operation_name')` is to break it down to two components. First, calling `tf.op(..., name='operation_name')` would indeed lead to the construction of a new operation. The operation is also added to the computational graph. Second, though this looks like a constructor, it is just a function call with side-effect, and the return value of this function is a tensor. Again, this is documented well, but you may easily skim through.
 
 Thus, to get the output of an operation, you will have to pass the output tensor to `session.run`, not the operator itself. For instance, use `session.run(op.outputs, feed_dict=...)`.
+
+_Gotcha_: **Evaluate intermediate/temporary tensor values?**
+
+Naming operations you defined can certainly help restore the reference to its output tensor. However, if the tensor is returned from a library call (a good example is `outputs = tf.nn.rnn()` where the library functio `rnn` runs the RNN for you), then you do not get to name the last operation.
+
+A **hack** you can do is to add the tensor to your computation graph's _collection_. The MetaGraph (something your Saver will store when you save a checkpoint) object maintains a _collection_ object, which is a mapping from string to list of heterogenous objects in a computation graph (variables, tensors, operations, etc.).
+
+You can put **any** intermediate operation or tensor into the default graph's collection, via
+```python
+tf.add_to_collection("tensor_collection_key", tensor)
+```
+
+Later use
+```python
+tensor = tf.get_collection("tensor_collection_key")[i]
+# or graph.get_collection("collection_name")
+```
+to restore the tensor.
+
+Wait, I hear your protest. If we can use just add things to collections, why would we go through all the trouble above to name operations? We can just name our collections! There are two reasons. First, TensorFlow system itself uses collections, sometimes in an undisciplined way. The framework is using keys defined in [GraphKeys](https://www.tensorflow.org/versions/r0.11/api_docs/python/framework.html#GraphKeys), and it is not obvious to users what are the keys you should avoid unless you read the doc. Second, each collection is a list. You will need to either store each value under a unique key, or remember the order values are added to the collection to retrieve them properly. It is far more error-prone than just use unique operation names. You can certainly use standard names for collections. Keep in mind that the framework change may introduce bugs to your code if TF introduces keys that you are already using.
+
+Based on the reasoning above, we recommend limiting the usage of collections, and only use it when there is no other alternative.
